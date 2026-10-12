@@ -1,0 +1,7 @@
+# Bronze EPW -> silver weather_hourly -> gold district_morphology -> gold urban_heat_hourly.
+# Silver buildings / land_cover / districts come from other repos' conformers (or rewire/e2e.sh seeds them).
+name: uwg-urban-heat
+steps:
+  - transform: epw.weather_conform
+  - transform: morphology.district
+  - transform: uwg.urban_heat

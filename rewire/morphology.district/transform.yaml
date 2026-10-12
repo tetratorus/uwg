@@ -1,0 +1,62 @@
+id: morphology.district
+version: 0.1.0
+kind: transform
+title: District urban morphology (UWG canopy parameters) from silver buildings + land cover
+description: >
+  Aggregates silver buildings and land_cover to each silver district and returns the urban-canopy parameters
+  that UWG reads from its .uwg file: bldHeight, bldDensity, verToHor, grasscover, treeCover.
+  Formulas (EPSG:3414 planar metres): bldheight = sum(h_i * footprint_i) / sum(footprint_i);
+  blddensity = sum(footprint_i) / A_district; vertohor = sum(perimeter_i * h_i) / A_district;
+  grass/treecover = sum(cover_j * area(cell_j intersect district)) / A_district. h_i = height_m, otherwise
+  storeys * storey_height_m. Pure geopandas (MIT); does not import uwg.
+upstream:
+  repo: tetratorus/uwg (fork of ladybug-tools/uwg)
+  license: MIT (adapter code; parameter definitions follow UWG docs, GPL-3 code is not used)
+  commercial_use: allowed
+  notes: >
+    Re-implements no UWG science: it only derives the five geometric inputs that UWG documents in
+    resources/initialize_singapore.uwg. Output licence follows the licences of the silver buildings/land_cover sources.
+runtime: {type: python, entrypoint: "adapter:run"}
+inputs:
+  - {name: districts, source: "silver:districts", columns: [district_id, geometry]}
+  - {name: buildings, source: "silver:buildings", columns: [building_id, district_id, geometry, height_m, storeys]}
+  - {name: land_cover, source: "silver:land_cover", columns: [cell_id, geometry, tree_cover, grass_cover]}
+parameters:
+  type: object
+  properties:
+    storey_height_m:
+      type: number
+      default: 3.05
+      minimum: 2
+      maximum: 6
+      description: used when height_m is missing (UWG's default floor height h_floor is 3.05 m)
+outputs:
+  - name: district_morphology
+    key: [district_id]
+    columns:
+      - {name: district_id, type: string}
+      - {name: district_area_m2, type: float, unit: m2}
+      - {name: n_buildings, type: int}
+      - {name: bldheight, type: float, unit: m, description: "UWG bldHeight"}
+      - {name: blddensity, type: float, unit: "1", description: "UWG bldDensity"}
+      - {name: vertohor, type: float, unit: "1", description: "UWG verToHor"}
+      - {name: grasscover, type: float, unit: "1", description: "UWG grasscover"}
+      - {name: treecover, type: float, unit: "1", description: "UWG treeCover"}
+golden:
+  - name: singapore_reference
+    path: golden/singapore_reference
+    tolerance: {rtol: 1.0e-12, atol: 1.0e-12}
+    reference: >
+      District D-SG-REF is a synthetic 100 m x 100 m block (8 detached 25 m x 25 m buildings, 10 m tall, and four
+      50 m land-cover cells). Expected values are UWG's own Singapore parameters in resources/initialize_singapore.uwg
+      (bldHeight 10, bldDensity 0.5, verToHor 0.8, grasscover 0.1, treeCover 0.1). District D-SG-DENSE is hand-computed.
+readiness:
+  level: 6
+  evidence:
+    - "spine test: golden singapore_reference PASS - synthetic block reproduces initialize_singapore.uwg morphology (10, 0.5, 0.8, 0.1, 0.1) and a hand-computed dense block"
+    - "rewire/tests: storeys fallback and land-cover cells crossing district boundaries (area-weighted intersection)"
+    - "rewire/e2e.sh: gold district_morphology produced in a lake from silver buildings/land_cover/districts"
+  gaps:
+    - "not yet run on real URA/OneMap building footprints or a real land-cover raster"
+    - "facade area counts shared party walls of attached buildings"
+    - "no road/impervious fraction or LCZ-based defaults yet"
