@@ -1,0 +1,85 @@
+id: uwg.urban_heat
+version: 0.1.0
+kind: transform
+title: Urban Weather Generator - hourly urban canyon air temperature and UHI per district
+description: >
+  Runs the unmodified Urban Weather Generator (ladybug-tools/uwg, Python port of MIT's UWG; Bueno et al. 2013)
+  once per district. Silver weather_hourly (one rural station) is rebuilt into an EPW, the district's gold
+  morphology (bldheight, blddensity, vertohor, grass/treecover) overrides the matching values of the base
+  parameter file (default: UWG's own resources/initialize_singapore.uwg - Singapore, climate zone 1A,
+  LargeOffice 40% / MidRiseApartment 60%, January, 31 days), and UWG's hourly canyon air temperature,
+  dew point and relative humidity are returned. uhi_c = urban_air_temp_c - rural_air_temp_c.
+  GPL boundary: UWG runs only inside the docker image built from ./Dockerfile (Python 3.11).
+  The MIT adapter.py (EPW rebuild, parameter mapping, output assembly) is copied into the image and is
+  imported by the GPL runner runtime/run_uwg.py, never the other way round.
+upstream:
+  repo: tetratorus/uwg (fork of ladybug-tools/uwg)
+  license: GPL-3.0
+  commercial_use: review
+  notes: >
+    UWG is GPL-3. Running it as a separate process/container and exchanging files does not make spine code
+    a derivative work, but redistributing the image or a modified uwg must follow GPL-3 (source offer).
+    The default weather (Singapore IWEC EPW, ASHRAE) has its own licence terms; see epw.weather_conform.
+runtime:
+  type: docker
+  image: tetratorus/uwg-urban-heat:0.1.0
+  command: [python, /opt/rewire/run_uwg.py, "{inputs}", "{params}", "{outputs}"]
+inputs:
+  - {name: weather_hourly, source: "silver:weather_hourly"}
+  - {name: district_morphology, source: "gold:morphology.district/district_morphology",
+     columns: [district_id, bldheight, blddensity, vertohor, grasscover, treecover]}
+parameters:
+  type: object
+  properties:
+    station_id: {type: string, description: "silver station hub id to use as the rural reference (required if weather_hourly has several)"}
+    month: {type: integer, minimum: 1, maximum: 12, description: "simulation start month (default: from the .uwg file)"}
+    day: {type: integer, minimum: 1, maximum: 31, description: "simulation start day (default: from the .uwg file)"}
+    nday: {type: integer, minimum: 1, maximum: 365, description: "number of days to simulate (default: from the .uwg file)"}
+    param_file: {type: string, description: "base .uwg file inside the image", default: /opt/uwg/resources/initialize_singapore.uwg}
+outputs:
+  - name: urban_heat_hourly
+    key: [district_id, timestamp]
+    columns:
+      - {name: district_id, type: string}
+      - {name: station_id, type: string, description: "rural reference station (silver hub id)"}
+      - {name: timestamp, type: timestamp, description: "UTC, end of the hour"}
+      - {name: urban_air_temp_c, type: float, unit: degC, description: "UWG UCMData.canTemp (urban canyon air temperature)"}
+      - {name: rural_air_temp_c, type: float, unit: degC, description: "station dry bulb from silver weather_hourly"}
+      - {name: uhi_c, type: float, unit: K, description: "urban heat island intensity, urban minus rural"}
+      - {name: urban_dew_point_c, type: float, unit: degC, description: "UWG UCMData.Tdp"}
+      - {name: urban_rh_pct, type: float, unit: "%", description: "UWG UCMData.canRHum"}
+golden:
+  - name: singapore_jan
+    path: golden/singapore_jan
+    tolerance: {rtol: 0.0, atol: 1.0e-9}
+    reference: >
+      Unmodified upstream UWG run directly on resources/initialize_singapore.uwg + the ORIGINAL
+      resources/SGP_Singapore.486980_IWEC.epw (rewire/tools/freeze_goldens.py, Python 3.11 image).
+      D-SG-REF has exactly the .uwg file's morphology; D-SG-DENSE overrides it. Proves the spine path
+      (silver weather -> rebuilt EPW, gold morphology -> UWG attributes) does not change the model's answer.
+  - name: matlab_reference
+    path: golden/matlab_reference
+    tolerance:
+      rtol: 0.0
+      atol: 0.05
+      columns:
+        urban_air_temp_c: {atol: 0.35}
+        urban_rh_pct: {atol: 2.0}
+    reference: >
+      UWG's own MATLAB reference output tests/matlab_ref/matlab_output/SGP_Singapore.486980_IWEC_UWG_Matlab.epw
+      (the file tests/old_matlab_output/old_output.py compares against), for the D-SG-REF district.
+      The MATLAB file is rounded to 0.1 and the Python port is not bit-identical to MATLAB. Measured
+      Python-vs-MATLAB |diff| over the 744 hours: air temperature max 0.333 K (mean 0.013, p99 0.060),
+      dew point max 0.000, RH max 1.91 % (mean 0.056, p99 0.22). Tolerances are set just above those values.
+readiness:
+  level: 6
+  evidence:
+    - "spine test: golden singapore_jan PASS (atol 1e-9) - spine path equals an unmodified upstream UWG run on initialize_singapore.uwg + original EPW, for 2 districts x 744 h"
+    - "spine test: golden matlab_reference PASS - within the measured Python-vs-MATLAB gap (air temperature max 0.333 K, RH max 1.91 %)"
+    - "upstream pytest tests/: 61 passed on Python 3.11 (image pin); test_cli 6 passed with pydantic<2"
+    - "rewire/e2e.sh: bronze EPW -> silver -> gold urban_heat_hourly in a lake via the docker runtime, served by spine serve"
+  gaps:
+    - "Python 3.12 gives slightly different numbers (up to 0.0024 K) and fails 5 upstream tests, so the runtime is pinned to Python 3.11"
+    - "each district runs as an independent single-column UWG simulation with one rural station"
+    - "non-morphology parameters (building mix, albedo, charLength) come from initialize_singapore.uwg"
+    - "not validated against Singapore street-level observations"

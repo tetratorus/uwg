@@ -1,0 +1,66 @@
+id: epw.weather_conform
+version: 0.1.0
+kind: conformer
+title: EPW weather file -> silver weather_hourly (+ id_bridge station rows)
+description: >
+  Parses EnergyPlus Weather (EPW) files registered in bronze (e.g. the Singapore IWEC file bundled with UWG,
+  resources/SGP_Singapore.486980_IWEC.epw) into the canonical hourly weather table. Timestamps are the end of
+  each EPW hour, converted from local standard time to UTC. The station hub id is derived from the WMO index
+  (wmo-486980); the WMO number and the EPW dataset name are written to id_bridge.
+  Extension columns beyond spec/silver/tables.yaml (needed to rebuild a model-ready EPW for uwg.urban_heat):
+  horizontal_ir_wm2, latitude_deg, longitude_deg, utc_offset_h, elevation_m, ground_temps_json.
+  Plain CSV parsing; does not import the GPL uwg package.
+upstream:
+  repo: tetratorus/uwg (fork of ladybug-tools/uwg)
+  license: MIT (adapter code). Data - IWEC EPW (c) 2001 ASHRAE, redistributed by ladybug-tools/uwg and EnergyPlus weather; see EPW COMMENTS 1
+  commercial_use: review
+  notes: >
+    The adapter is MIT and imports nothing from uwg. The bundled Singapore IWEC weather file carries an ASHRAE
+    copyright notice ("All rights reserved as noted in the License Agreement"); check ASHRAE IWEC terms before
+    commercial use of that data. Replace with a licence-clear source (e.g. MSS station data) for production.
+runtime: {type: python, entrypoint: "adapter:run"}
+inputs:
+  - {name: epw, source: "bronze:epw"}
+outputs:
+  - name: weather_hourly
+    key: [station_id, timestamp]
+    columns:
+      - {name: station_id, type: string}
+      - {name: timestamp, type: timestamp, description: "UTC, end of the EPW hour"}
+      - {name: dry_bulb_c, type: float, unit: degC}
+      - {name: dew_point_c, type: float, unit: degC}
+      - {name: rh_pct, type: float, unit: "%"}
+      - {name: pressure_pa, type: float, unit: Pa}
+      - {name: horizontal_ir_wm2, type: float, unit: W/m2, description: "extension column (EPW field 13)"}
+      - {name: ghi_wm2, type: float, unit: W/m2}
+      - {name: dni_wm2, type: float, unit: W/m2}
+      - {name: dhi_wm2, type: float, unit: W/m2}
+      - {name: wind_dir_deg, type: float, unit: deg}
+      - {name: wind_speed_ms, type: float, unit: m/s}
+      - {name: latitude_deg, type: float, unit: deg, description: "extension column (EPW LOCATION)"}
+      - {name: longitude_deg, type: float, unit: deg, description: "extension column (EPW LOCATION)"}
+      - {name: utc_offset_h, type: float, unit: h, description: "extension column (EPW LOCATION)"}
+      - {name: elevation_m, type: float, unit: m, description: "extension column (EPW LOCATION)"}
+      - {name: ground_temps_json, type: string, description: "extension column (EPW GROUND TEMPERATURES as JSON)"}
+      - {name: source_version, type: string}
+  - name: id_bridge
+    key: [source, source_id]
+golden:
+  - name: singapore_iwec
+    path: golden/singapore_iwec
+    tolerance: {rtol: 0.0, atol: 1.0e-12}
+    reference: >
+      Physical columns (dry bulb, dew point, RH, pressure, IR, GHI, DNI, DHI, wind) and header fields
+      (lat, lon, UTC offset, ground temperatures) frozen from the UNMODIFIED upstream readers
+      uwg.weather.Weather and UWG._read_epw on resources/SGP_Singapore.486980_IWEC.epw
+      (rewire/tools/freeze_goldens.py). Timestamps and hub ids follow the spine convention above.
+readiness:
+  level: 6
+  evidence:
+    - "spine test: golden singapore_iwec PASS - 8760 rows match uwg.weather.Weather / UWG._read_epw on the bundled Singapore IWEC EPW (atol 1e-12)"
+    - "rewire/tests: id_bridge maps WMO 486980 and EPW name onto hub wmo-486980; timestamps are UTC end-of-hour"
+    - "rewire/e2e.sh: spine bronze-add + spine workflow wrote silver.weather_hourly + silver.id_bridge, served via spine serve"
+  gaps:
+    - "only tested on one EPW (Singapore IWEC 2001); TMY files with Feb 29 or sub-hourly data are untested"
+    - "id_bridge is replaced whole by Lake.silver_write; another conformer writing id_bridge afterwards would overwrite these rows"
+    - "IWEC data licence (ASHRAE) needs review before commercial use; no live MSS feed yet"
